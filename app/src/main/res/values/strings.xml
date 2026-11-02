@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">Young Entomologist Society</string>
+    <string name="society_short_name">YES</string>
+    <string name="society_tagline">Department of Entomology</string>
+    <string name="society_department">Department of Entomology, UAF</string>
+    <string name="sign_in_google">Sign in with Google</string>
+    <string name="logout_label">Logout</string>
+    <string name="verify_certificate_label">Verify Certificate</string>
+    <string name="download_pdf_label">Download PDF</string>
+    <string name="export_csv_label">Export Excel (CSV)</string>
+    <string name="view_id_card_label">View ID Card</string>
+    <string name="portrait_cabinet_card_title">Portrait Executive Cabinet Credential</string>
+    <string name="portrait_general_card_title">Portrait General Member Identity Card</string>
+    <string name="cabinet_id_cards_label">Cabinet ID Cards</string>
+    <string name="event_calendar_label">Event Calendar</string>
+    <string name="qr_camera_scan_label">Camera QR Scan</string>
+</resources>

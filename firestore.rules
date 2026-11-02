@@ -1,0 +1,922 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 0. Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Reusable Hardened Primitives ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    function isOptString(data, field, maxLen) {
+      return !(field in data) || data[field] == null || (data[field] is string && data[field].size() <= maxLen);
+    }
+
+    // Bootstrapped Super Administrator (Project Owner with verified email)
+    function isBootstrappedSuperAdmin() {
+      return isSignedIn() &&
+             ('email_verified' in request.auth.token) &&
+             request.auth.token.email_verified == true &&
+             ('email' in request.auth.token) &&
+             request.auth.token.email == 'abubakar.offical227@gmail.com';
+    }
+
+    function adminDocExists() {
+      return exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function adminDoc() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.uid)).data;
+    }
+
+    function isActiveAdmin() {
+      return isBootstrappedSuperAdmin() ||
+             (isSignedIn() && adminDocExists() && adminDoc().active == true);
+    }
+
+    function isBlockedUser() {
+      return exists(/databases/$(database)/documents/blocked_accounts/$(request.auth.uid));
+    }
+
+    function isSuperAdmin() {
+      return isBootstrappedSuperAdmin() ||
+             (isSignedIn() && adminDocExists() && adminDoc().active == true &&
+              (adminDoc().adminRole == 'SUPER_ADMIN' || 'MANAGE_ADMINS' in adminDoc().permissions));
+    }
+
+    function hasAnyRoleOrPerm(roles, permName) {
+      return isSuperAdmin() ||
+             (isSignedIn() && adminDocExists() && adminDoc().active == true &&
+              (adminDoc().adminRole in roles || permName in adminDoc().permissions));
+    }
+
+    function isStudentManager() {
+      return hasAnyRoleOrPerm(['PRESIDENT', 'CONVENER', 'ADVISORY_BOARD', 'SENIOR_VICE_PRESIDENT', 'ASSOCIATE_SENIOR_VP', 'VICE_PRESIDENT', 'ASSOCIATE_VP', 'GENERAL_SECRETARY', 'ASSOCIATE_GENERAL_SECRETARY', 'JOINT_SECRETARY', 'ASSOCIATE_JOINT_SECRETARY', 'COUNCILLOR', 'ASSOCIATE_COUNCILLOR'], 'MANAGE_STUDENTS');
+    }
+
+    function isMembershipManager() {
+      return hasAnyRoleOrPerm(['PRESIDENT', 'CONVENER', 'ADVISORY_BOARD', 'SENIOR_VICE_PRESIDENT', 'ASSOCIATE_SENIOR_VP', 'VICE_PRESIDENT', 'ASSOCIATE_VP', 'GENERAL_SECRETARY', 'ASSOCIATE_GENERAL_SECRETARY', 'JOINT_SECRETARY', 'ASSOCIATE_JOINT_SECRETARY', 'COUNCILLOR', 'ASSOCIATE_COUNCILLOR'], 'MANAGE_MEMBERSHIP');
+    }
+
+    function isStudentOrMembershipManager() {
+      return isSuperAdmin() ||
+             (isSignedIn() && adminDocExists() && adminDoc().active == true &&
+              (adminDoc().adminRole in ['PRESIDENT', 'CONVENER', 'ADVISORY_BOARD', 'SENIOR_VICE_PRESIDENT', 'ASSOCIATE_SENIOR_VP', 'VICE_PRESIDENT', 'ASSOCIATE_VP', 'GENERAL_SECRETARY', 'ASSOCIATE_GENERAL_SECRETARY', 'JOINT_SECRETARY', 'ASSOCIATE_JOINT_SECRETARY', 'COUNCILLOR', 'ASSOCIATE_COUNCILLOR'] ||
+               'MANAGE_STUDENTS' in adminDoc().permissions ||
+               'MANAGE_MEMBERSHIP' in adminDoc().permissions));
+    }
+
+    function isExecutiveManager() {
+      return hasAnyRoleOrPerm(['PRESIDENT', 'CONVENER', 'ADVISORY_BOARD', 'SENIOR_VICE_PRESIDENT', 'VICE_PRESIDENT', 'GENERAL_SECRETARY', 'JOINT_SECRETARY'], 'MANAGE_EXECUTIVE');
+    }
+
+    function isEventManager() {
+      return hasAnyRoleOrPerm(['PRESIDENT', 'CONVENER', 'ADVISORY_BOARD', 'SENIOR_VICE_PRESIDENT', 'VICE_PRESIDENT', 'GENERAL_SECRETARY', 'JOINT_SECRETARY', 'EVENT_SECRETARY', 'ASSOCIATE_EVENT_SECRETARY', 'SPORTS_SECRETARY', 'ASSOCIATE_SPORTS_SECRETARY', 'COUNCILLOR'], 'MANAGE_EVENTS') ||
+             hasAnyRoleOrPerm(['PRESIDENT', 'CONVENER', 'EVENT_SECRETARY', 'ASSOCIATE_EVENT_SECRETARY'], 'MANAGE_REGISTRATIONS');
+    }
+
+    function isFinanceAdmin() {
+      return hasAnyRoleOrPerm(['PRESIDENT', 'FINANCE_SECRETARY', 'ASSOCIATE_FINANCE_SECRETARY'], 'MANAGE_FINANCE');
+    }
+
+    function isEventOrFinanceAdmin() {
+      return isEventManager() || isFinanceAdmin();
+    }
+
+    function isAttendanceManager() {
+      return hasAnyRoleOrPerm(['PRESIDENT', 'CONVENER', 'ATTENDANCE_MANAGER', 'ASSOCIATE_EVENT_SECRETARY', 'ASSOCIATE_COUNCILLOR'], 'MANAGE_ATTENDANCE') || isEventManager();
+    }
+
+    function isAnnouncementManager() {
+      return hasAnyRoleOrPerm(['PRESIDENT', 'CONVENER', 'ADVISORY_BOARD', 'INFORMATION_SECRETARY', 'ASSOCIATE_INFORMATION_SECRETARY', 'PRESS_SECRETARY', 'ASSOCIATE_PRESS_SECRETARY', 'IT_MEDIA_CELL', 'ASSOCIATE_IT_MEDIA_CELL', 'GENERAL_SECRETARY', 'ASSOCIATE_GENERAL_SECRETARY', 'JOINT_SECRETARY'], 'MANAGE_ANNOUNCEMENTS') ||
+             isEventManager();
+    }
+
+    function isGalleryManager() {
+      return hasAnyRoleOrPerm(['PRESIDENT', 'INFORMATION_SECRETARY', 'ASSOCIATE_INFORMATION_SECRETARY', 'PRESS_SECRETARY', 'ASSOCIATE_PRESS_SECRETARY', 'IT_MEDIA_CELL', 'ASSOCIATE_IT_MEDIA_CELL'], 'MANAGE_GALLERY');
+    }
+
+    function isCertificateManager() {
+      return hasAnyRoleOrPerm(['PRESIDENT', 'CONVENER', 'ADVISORY_BOARD', 'SENIOR_VICE_PRESIDENT', 'VICE_PRESIDENT', 'GENERAL_SECRETARY', 'JOINT_SECRETARY', 'IT_MEDIA_CELL'], 'MANAGE_CERTIFICATES') || isEventManager();
+    }
+
+    // --- Validation Helpers ---
+
+    function isValidUserAccount(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.email is string && data.email.size() >= 3 && data.email.size() <= 150 &&
+             data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
+             isOptString(data, 'photoUri', 500000) &&
+             data.accountType in ['STUDENT', 'ADMIN'] &&
+             data.active is bool &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidStudentProfile(data) {
+      return data.studentUid is string && data.studentUid.size() >= 1 && data.studentUid.size() <= 128 &&
+             data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
+             data.email is string && data.email.size() >= 3 && data.email.size() <= 150 &&
+             data.registrationNumber is string && data.registrationNumber.size() >= 2 && data.registrationNumber.size() <= 40 &&
+             isOptString(data, 'degreeLevel', 80) &&
+             data.department is string && data.department.size() >= 2 && data.department.size() <= 100 &&
+             data.semester is string && data.semester.size() >= 1 && data.semester.size() <= 40 &&
+             isOptString(data, 'phone', 30) &&
+             isOptString(data, 'photoUri', 500000) &&
+             isOptString(data, 'studentCardUri', 500000) &&
+             isOptString(data, 'position', 80) &&
+             (!('profileLocked' in data) || data.profileLocked == null || data.profileLocked is bool) &&
+             data.membershipStatus in ['NONE', 'PENDING', 'ACTIVE', 'VERIFIED', 'INACTIVE', 'REJECTED'] &&
+             (!('idCardStatus' in data) || data.idCardStatus == null || data.idCardStatus in ['', 'NOT_ISSUED', 'ISSUED', 'REVOKED']) &&
+             isOptString(data, 'membershipId', 50) &&
+             isOptString(data, 'membershipValidUntil', 40) &&
+             data.active is bool &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAdminAccount(data) {
+      return data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+             data.email is string && data.email.size() >= 3 && data.email.size() <= 150 &&
+             data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
+             data.adminRole in [
+               'SUPER_ADMIN', 'PRESIDENT',
+               'CONVENER', 'ADVISORY_BOARD',
+               'SENIOR_VICE_PRESIDENT', 'ASSOCIATE_SENIOR_VP',
+               'VICE_PRESIDENT', 'ASSOCIATE_VP',
+               'GENERAL_SECRETARY', 'ASSOCIATE_GENERAL_SECRETARY',
+               'JOINT_SECRETARY', 'ASSOCIATE_JOINT_SECRETARY',
+               'COUNCILLOR', 'ASSOCIATE_COUNCILLOR',
+               'FINANCE_SECRETARY', 'ASSOCIATE_FINANCE_SECRETARY',
+               'IT_MEDIA_CELL', 'ASSOCIATE_IT_MEDIA_CELL',
+               'PRESS_SECRETARY', 'ASSOCIATE_PRESS_SECRETARY',
+               'INFORMATION_SECRETARY', 'ASSOCIATE_INFORMATION_SECRETARY',
+               'EVENT_SECRETARY', 'ASSOCIATE_EVENT_SECRETARY',
+               'SPORTS_SECRETARY', 'ASSOCIATE_SPORTS_SECRETARY',
+               'ATTENDANCE_MANAGER'
+             ] &&
+             data.designation is string && data.designation.size() >= 2 && data.designation.size() <= 80 &&
+             data.permissions is list && data.permissions.size() <= 15 &&
+             (data.permissions.size() == 0 || (data.permissions[0] is string && data.permissions[0].size() <= 50)) &&
+             data.active is bool &&
+             data.assignedByUid is string && data.assignedByUid.size() >= 1 && data.assignedByUid.size() <= 128 &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidMembershipApplication(data) {
+      return data.studentUid is string && data.studentUid.size() >= 1 && data.studentUid.size() <= 128 &&
+             data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 100 &&
+             data.studentEmail is string && data.studentEmail.size() >= 3 && data.studentEmail.size() <= 150 &&
+             data.registrationNumber is string && data.registrationNumber.size() >= 2 && data.registrationNumber.size() <= 40 &&
+             isOptString(data, 'degreeLevel', 80) &&
+             data.department is string && data.department.size() >= 2 && data.department.size() <= 100 &&
+             data.semester is string && data.semester.size() >= 1 && data.semester.size() <= 40 &&
+             isOptString(data, 'phone', 30) &&
+             isOptString(data, 'photoUri', 500000) &&
+             isOptString(data, 'studentCardUri', 500000) &&
+             data.motivation is string && data.motivation.size() >= 3 && data.motivation.size() <= 600 &&
+             data.status in ['PENDING', 'APPROVED', 'VERIFIED', 'REJECTED'] &&
+             isOptString(data, 'assignedMembershipId', 50) &&
+             isOptString(data, 'reviewedByUid', 128) &&
+             isOptString(data, 'reviewNotes', 300) &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidExecutiveMember(data) {
+      return data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
+             data.designation is string && data.designation.size() >= 2 && data.designation.size() <= 80 &&
+             data.department is string && data.department.size() >= 2 && data.department.size() <= 100 &&
+             data.tenure is string && data.tenure.size() >= 2 && data.tenure.size() <= 40 &&
+             isOptString(data, 'email', 150) &&
+             isOptString(data, 'photoUri', 500000) &&
+             data.displayOrder is int && data.displayOrder >= 0 && data.displayOrder <= 1000 &&
+             data.published is bool &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSocietyEvent(data) {
+      return data.title is string && data.title.size() >= 3 && data.title.size() <= 120 &&
+             data.description is string && data.description.size() >= 3 && data.description.size() <= 1500 &&
+             data.category is string && data.category.size() >= 2 && data.category.size() <= 60 &&
+             data.eventDate is string && data.eventDate.size() >= 4 && data.eventDate.size() <= 40 &&
+             data.eventTime is string && data.eventTime.size() >= 2 && data.eventTime.size() <= 40 &&
+             data.venue is string && data.venue.size() >= 2 && data.venue.size() <= 150 &&
+             isOptString(data, 'posterUri', 500000) &&
+             data.registrationDeadline is string && data.registrationDeadline.size() >= 4 && data.registrationDeadline.size() <= 40 &&
+             data.registrationFee is number && data.registrationFee >= 0 && data.registrationFee <= 1000000 &&
+             data.maxParticipants is int && data.maxParticipants >= 1 && data.maxParticipants <= 100000 &&
+             data.registeredCount is int && data.registeredCount >= 0 && data.registeredCount <= data.maxParticipants &&
+             data.qrCodeToken is string && data.qrCodeToken.size() >= 4 && data.qrCodeToken.size() <= 100 &&
+             data.upcoming is bool &&
+             data.published is bool &&
+             data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidEventRegistration(data) {
+      return data.eventId is string && isValidId(data.eventId) &&
+             data.eventTitle is string && data.eventTitle.size() >= 2 && data.eventTitle.size() <= 120 &&
+             data.eventDate is string && data.eventDate.size() >= 4 && data.eventDate.size() <= 40 &&
+             data.studentUid is string && data.studentUid.size() >= 1 && data.studentUid.size() <= 128 &&
+             data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 100 &&
+             data.registrationNumber is string && data.registrationNumber.size() >= 2 && data.registrationNumber.size() <= 40 &&
+             data.department is string && data.department.size() >= 2 && data.department.size() <= 100 &&
+             data.feeAmount is number && data.feeAmount >= 0 && data.feeAmount <= 1000000 &&
+             data.paymentStatus in ['FREE', 'UNPAID', 'RECEIPT_SUBMITTED', 'PAID', 'REJECTED'] &&
+             data.registrationStatus in ['PENDING', 'APPROVED', 'REJECTED'] &&
+             isOptString(data, 'receiptUri', 500000) &&
+             isOptString(data, 'transactionRef', 100) &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAttendanceRecord(data) {
+      return data.eventId is string && isValidId(data.eventId) &&
+             data.eventTitle is string && data.eventTitle.size() >= 2 && data.eventTitle.size() <= 120 &&
+             data.eventDate is string && data.eventDate.size() >= 4 && data.eventDate.size() <= 40 &&
+             data.studentUid is string && data.studentUid.size() >= 1 && data.studentUid.size() <= 128 &&
+             data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 100 &&
+             data.registrationNumber is string && data.registrationNumber.size() >= 2 && data.registrationNumber.size() <= 40 &&
+             isOptString(data, 'membershipId', 50) &&
+             data.status in ['PRESENT', 'ABSENT', 'EXCUSED'] &&
+             data.method in ['MANUAL', 'QR_SCAN', 'EVENT_QR_CHECKIN'] &&
+             data.markedByUid is string && data.markedByUid.size() >= 1 && data.markedByUid.size() <= 128 &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAnnouncement(data) {
+      return data.title is string && data.title.size() >= 3 && data.title.size() <= 150 &&
+             data.message is string && data.message.size() >= 3 && data.message.size() <= 2000 &&
+             data.category in ['GENERAL', 'MEETING', 'DEADLINE', 'URGENT', 'EVENT_REMINDER'] &&
+             data.targetGroup in ['ALL_STUDENTS', 'ACTIVE_MEMBERS', 'EXECUTIVE_BODY'] &&
+             data.priority in ['NORMAL', 'IMPORTANT', 'URGENT'] &&
+             isOptString(data, 'scheduledDate', 40) &&
+             data.authorName is string && data.authorName.size() >= 2 && data.authorName.size() <= 100 &&
+             data.authorUid is string && data.authorUid.size() >= 1 && data.authorUid.size() <= 128 &&
+             data.published is bool &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidUserNotification(data) {
+      return data.recipientUid is string && data.recipientUid.size() >= 1 && data.recipientUid.size() <= 128 &&
+             data.title is string && data.title.size() >= 2 && data.title.size() <= 150 &&
+             data.body is string && data.body.size() >= 2 && data.body.size() <= 600 &&
+             data.type in ['ANNOUNCEMENT', 'EVENT', 'DEADLINE', 'MEMBERSHIP', 'PAYMENT', 'SCHEDULE', 'CERTIFICATE'] &&
+             data.read is bool &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidStudentPayment(data) {
+      return data.studentUid is string && data.studentUid.size() >= 1 && data.studentUid.size() <= 128 &&
+             data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 100 &&
+             data.registrationNumber is string && data.registrationNumber.size() >= 2 && data.registrationNumber.size() <= 40 &&
+             isOptString(data, 'eventId', 128) &&
+             data.purposeTitle is string && data.purposeTitle.size() >= 2 && data.purposeTitle.size() <= 150 &&
+             data.amount is number && data.amount >= 0 && data.amount <= 1000000 &&
+             isOptString(data, 'paymentDate', 40) &&
+             isOptString(data, 'transactionRef', 100) &&
+             isOptString(data, 'receiptUri', 500000) &&
+             data.status in ['UNPAID', 'PENDING_VERIFICATION', 'VERIFIED', 'REJECTED'] &&
+             isOptString(data, 'verifiedByUid', 128) &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidFinanceTransaction(data) {
+      return data.title is string && data.title.size() >= 2 && data.title.size() <= 150 &&
+             data.type in ['INCOME', 'EXPENSE'] &&
+             data.category is string && data.category.size() >= 2 && data.category.size() <= 60 &&
+             data.amount is number && data.amount > 0 && data.amount <= 10000000 &&
+             data.transactionDate is string && data.transactionDate.size() >= 4 && data.transactionDate.size() <= 40 &&
+             isOptString(data, 'referenceNumber', 100) &&
+             isOptString(data, 'relatedEventId', 128) &&
+             isOptString(data, 'notes', 500) &&
+             data.recordedByUid is string && data.recordedByUid.size() >= 1 && data.recordedByUid.size() <= 128 &&
+             data.recordedByName is string && data.recordedByName.size() >= 2 && data.recordedByName.size() <= 100 &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidPaymentAccount(data) {
+      return data.accountType in ['Bank Account', 'JazzCash', 'EasyPaisa', 'SadaPay', 'Nayapay', 'Other'] &&
+             data.bankOrWalletName is string && data.bankOrWalletName.size() >= 2 && data.bankOrWalletName.size() <= 100 &&
+             data.accountTitle is string && data.accountTitle.size() >= 2 && data.accountTitle.size() <= 120 &&
+             data.accountNumber is string && data.accountNumber.size() >= 3 && data.accountNumber.size() <= 80 &&
+             isOptString(data, 'ibanOrBranch', 120) &&
+             isOptString(data, 'instructions', 500) &&
+             data.active is bool &&
+             data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidGalleryItem(data) {
+      return data.title is string && data.title.size() >= 2 && data.title.size() <= 120 &&
+             data.albumCategory is string && data.albumCategory.size() >= 2 && data.albumCategory.size() <= 60 &&
+             isOptString(data, 'caption', 400) &&
+             data.eventDate is string && data.eventDate.size() >= 4 && data.eventDate.size() <= 40 &&
+             isOptString(data, 'imageUri', 500000) &&
+             isOptString(data, 'accentTheme', 40) &&
+             data.approved is bool &&
+             data.uploadedByUid is string && data.uploadedByUid.size() >= 1 && data.uploadedByUid.size() <= 128 &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidSocietyCertificate(data) {
+      return data.certificateCode is string && data.certificateCode.size() >= 4 && data.certificateCode.size() <= 60 &&
+             data.studentUid is string && data.studentUid.size() >= 1 && data.studentUid.size() <= 128 &&
+             data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 100 &&
+             data.registrationNumber is string && data.registrationNumber.size() >= 2 && data.registrationNumber.size() <= 40 &&
+             isOptString(data, 'eventId', 128) &&
+             data.eventTitle is string && data.eventTitle.size() >= 2 && data.eventTitle.size() <= 120 &&
+             data.eventDate is string && data.eventDate.size() >= 4 && data.eventDate.size() <= 40 &&
+             data.certificateType in ['PARTICIPATION', 'ORGANIZER', 'MERIT', 'MEMBERSHIP'] &&
+             data.authorizedSignatory is string && data.authorizedSignatory.size() >= 2 && data.authorizedSignatory.size() <= 120 &&
+             data.issuedByUid is string && data.issuedByUid.size() >= 1 && data.issuedByUid.size() <= 128 &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidStudentFeedback(data) {
+      return data.studentUid is string && data.studentUid.size() >= 1 && data.studentUid.size() <= 128 &&
+             data.studentName is string && data.studentName.size() >= 2 && data.studentName.size() <= 100 &&
+             data.category in ['SUGGESTION', 'COMPLAINT', 'EVENT_FEEDBACK', 'GENERAL_MESSAGE'] &&
+             data.subject is string && data.subject.size() >= 3 && data.subject.size() <= 150 &&
+             data.message is string && data.message.size() >= 5 && data.message.size() <= 1500 &&
+             isOptString(data, 'relatedEventTitle', 120) &&
+             data.status in ['SUBMITTED', 'IN_REVIEW', 'RESOLVED'] &&
+             isOptString(data, 'adminResponse', 1000) &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidAdminAuditLog(data) {
+      return data.actorUid is string && data.actorUid.size() >= 1 && data.actorUid.size() <= 128 &&
+             data.actorName is string && data.actorName.size() >= 2 && data.actorName.size() <= 100 &&
+             data.actorRole is string && data.actorRole.size() >= 2 && data.actorRole.size() <= 50 &&
+             data.action is string && data.action.size() >= 2 && data.action.size() <= 120 &&
+             data.targetSummary is string && data.targetSummary.size() >= 2 && data.targetSummary.size() <= 300 &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt);
+    }
+
+    function isValidBlockedAccount(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.email is string && data.email.size() >= 3 && data.email.size() <= 150 &&
+             data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
+             isOptString(data, 'registrationNumber', 40) &&
+             data.reason is string && data.reason.size() >= 2 && data.reason.size() <= 400 &&
+             data.blockedByUid is string && data.blockedByUid.size() >= 1 && data.blockedByUid.size() <= 128 &&
+             data.blockedByName is string && data.blockedByName.size() >= 2 && data.blockedByName.size() <= 100 &&
+             data.societyId == 'YES_UAF' &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    // --- Collection Rules ---
+
+    // 1. Users Collection (PII isolated to owner or active admin; students cannot self-assign ADMIN; blocked accounts denied)
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && ((request.auth.uid == userId && !isBlockedUser()) || isActiveAdmin());
+      allow list: if isSignedIn() && (
+        (existing().userId == request.auth.uid && !isBlockedUser()) ||
+        (isActiveAdmin() && existing().societyId == 'YES_UAF')
+      );
+
+      allow create: if isSignedIn() && isValidId(userId) &&
+        incoming().keys().hasAll(['userId', 'email', 'fullName', 'accountType', 'active', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['userId', 'email', 'fullName', 'photoUri', 'accountType', 'active', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidUserAccount(incoming()) &&
+        incoming().userId == userId &&
+        (
+          (request.auth.uid == userId && !isBlockedUser() && incoming().accountType == 'STUDENT' && incoming().active == true) ||
+          isSuperAdmin()
+        );
+
+      allow update: if isSignedIn() && isValidId(userId) && isValidUserAccount(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          (request.auth.uid == userId &&
+           !isBlockedUser() &&
+           incoming().accountType == existing().accountType &&
+           incoming().active == existing().active &&
+           (!exists(/databases/$(database)/documents/students/$(userId)) ||
+            !('profileLocked' in get(/databases/$(database)/documents/students/$(userId)).data) ||
+            get(/databases/$(database)/documents/students/$(userId)).data.profileLocked == false) &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'photoUri', 'updatedAt'])) ||
+          isSuperAdmin() || isStudentOrMembershipManager()
+        );
+
+      allow delete: if isSignedIn() && isValidId(userId) && (
+        isSuperAdmin() ||
+        ((isStudentOrMembershipManager()) && existing().accountType == 'STUDENT')
+      );
+    }
+
+    // 2. Student Profiles Collection (PII isolated; locked once approved by Administrator; blocked accounts denied)
+    match /students/{studentId} {
+      allow get: if isSignedIn() && isValidId(studentId) && ((request.auth.uid == studentId && !isBlockedUser()) || isActiveAdmin());
+      allow list: if isSignedIn() && (
+        (existing().studentUid == request.auth.uid && !isBlockedUser()) ||
+        (isActiveAdmin() && existing().societyId == 'YES_UAF')
+      );
+
+      allow create: if isSignedIn() && isValidId(studentId) &&
+        incoming().keys().hasAll(['studentUid', 'fullName', 'email', 'registrationNumber', 'department', 'semester', 'membershipStatus', 'active', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['studentUid', 'fullName', 'email', 'registrationNumber', 'degreeLevel', 'department', 'semester', 'phone', 'photoUri', 'studentCardUri', 'position', 'profileLocked', 'membershipStatus', 'idCardStatus', 'membershipId', 'membershipValidUntil', 'active', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidStudentProfile(incoming()) &&
+        incoming().studentUid == studentId &&
+        (
+          (request.auth.uid == studentId &&
+           !isBlockedUser() &&
+           incoming().membershipStatus == 'NONE' &&
+           (!('idCardStatus' in incoming()) || incoming().idCardStatus in ['', 'NOT_ISSUED']) &&
+           (!('membershipId' in incoming()) || incoming().membershipId == '') &&
+           (!('profileLocked' in incoming()) || incoming().profileLocked == false) &&
+           (!('position' in incoming()) || incoming().position in ['', 'Member', 'Student']) &&
+           incoming().active == true) ||
+          isStudentManager()
+        );
+
+      allow update: if isSignedIn() && isValidId(studentId) && isValidStudentProfile(incoming()) &&
+        incoming().keys().hasOnly(['studentUid', 'fullName', 'email', 'registrationNumber', 'degreeLevel', 'department', 'semester', 'phone', 'photoUri', 'studentCardUri', 'position', 'profileLocked', 'membershipStatus', 'idCardStatus', 'membershipId', 'membershipValidUntil', 'active', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().studentUid == existing().studentUid &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          // Action 1: Student updates permitted personal profile details ONLY while profileLocked is false
+          (request.auth.uid == studentId &&
+           !isBlockedUser() &&
+           existing().active == true &&
+           (!('profileLocked' in existing()) || existing().profileLocked == false) &&
+           (!('profileLocked' in incoming()) || incoming().profileLocked == false) &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'phone', 'photoUri', 'studentCardUri', 'degreeLevel', 'department', 'semester', 'registrationNumber', 'updatedAt'])) ||
+          // Action 2: Student marks membership status as PENDING when applying
+          (request.auth.uid == studentId &&
+           !isBlockedUser() &&
+           existing().active == true &&
+           existing().membershipStatus in ['NONE', 'REJECTED'] &&
+           incoming().membershipStatus == 'PENDING' &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['membershipStatus', 'updatedAt'])) ||
+          // Action 3: Authorized Student/Membership Admin updates record (including lock/unlock & ID card issuance/revocation)
+          isStudentOrMembershipManager()
+        );
+
+      allow delete: if isSignedIn() && isValidId(studentId) && (isStudentOrMembershipManager());
+    }
+
+    // 3. Administrators & Roles Collection (Strictly controlled by Super Admin)
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && isValidId(adminId) && (request.auth.uid == adminId || isActiveAdmin());
+      allow list: if isSignedIn() && isActiveAdmin() && existing().societyId == 'YES_UAF';
+
+      allow create: if isSignedIn() && isValidId(adminId) &&
+        incoming().keys().hasAll(['uid', 'email', 'fullName', 'adminRole', 'designation', 'permissions', 'active', 'assignedByUid', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['uid', 'email', 'fullName', 'adminRole', 'designation', 'permissions', 'active', 'assignedByUid', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidAdminAccount(incoming()) &&
+        incoming().uid == adminId &&
+        isSuperAdmin();
+
+      allow update: if isSignedIn() && isValidId(adminId) && isValidAdminAccount(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        isSuperAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['email', 'fullName', 'adminRole', 'designation', 'permissions', 'active', 'assignedByUid', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(adminId) && isSuperAdmin();
+    }
+
+    // 4. Membership Applications
+    match /membership_applications/{applicationId} {
+      allow get: if isSignedIn() && isValidId(applicationId) && ((existing().studentUid == request.auth.uid && !isBlockedUser()) || isMembershipManager() || isStudentManager());
+      allow list: if isSignedIn() && (
+        (existing().studentUid == request.auth.uid && !isBlockedUser()) ||
+        ((isMembershipManager() || isStudentManager()) && existing().societyId == 'YES_UAF')
+      );
+
+      allow create: if isSignedIn() && isValidId(applicationId) &&
+        incoming().keys().hasAll(['studentUid', 'studentName', 'studentEmail', 'registrationNumber', 'department', 'semester', 'motivation', 'status', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['studentUid', 'studentName', 'studentEmail', 'registrationNumber', 'degreeLevel', 'department', 'semester', 'phone', 'photoUri', 'studentCardUri', 'motivation', 'status', 'assignedMembershipId', 'reviewedByUid', 'reviewNotes', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidMembershipApplication(incoming()) &&
+        (
+          (request.auth.uid == incoming().studentUid &&
+           !isBlockedUser() &&
+           incoming().status == 'PENDING' &&
+           (!('assignedMembershipId' in incoming()) || incoming().assignedMembershipId == '')) ||
+          isMembershipManager() || isStudentManager()
+        );
+
+      allow update: if isSignedIn() && isValidId(applicationId) && isValidMembershipApplication(incoming()) &&
+        incoming().studentUid == existing().studentUid &&
+        incoming().createdAt == existing().createdAt &&
+        (isMembershipManager() || isStudentManager()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'assignedMembershipId', 'reviewedByUid', 'reviewNotes', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(applicationId) && (isMembershipManager() || isStudentManager() || (resource != null && existing().studentUid == request.auth.uid && !isBlockedUser()));
+    }
+
+    // 5. Executive Body
+    match /executive_body/{memberId} {
+      allow get: if isSignedIn() && isValidId(memberId) && (existing().published == true || isExecutiveManager());
+      allow list: if isSignedIn() && (
+        existing().published == true ||
+        (isExecutiveManager() && existing().societyId == 'YES_UAF')
+      );
+
+      allow create: if isSignedIn() && isValidId(memberId) &&
+        incoming().keys().hasAll(['fullName', 'designation', 'department', 'tenure', 'displayOrder', 'published', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['fullName', 'designation', 'department', 'tenure', 'email', 'photoUri', 'displayOrder', 'published', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidExecutiveMember(incoming()) &&
+        isExecutiveManager();
+
+      allow update: if isSignedIn() && isValidId(memberId) && isValidExecutiveMember(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        isExecutiveManager() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'designation', 'department', 'tenure', 'email', 'photoUri', 'displayOrder', 'published', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(memberId) && isExecutiveManager();
+    }
+
+    // 6. Society Events
+    match /events/{eventId} {
+      allow get: if isSignedIn() && isValidId(eventId) && ((existing().published == true && !isBlockedUser()) || isActiveAdmin());
+      allow list: if isSignedIn() && (
+        (existing().published == true && !isBlockedUser()) ||
+        (isActiveAdmin() && existing().societyId == 'YES_UAF')
+      );
+
+      allow create: if isSignedIn() && isValidId(eventId) &&
+        incoming().keys().hasAll(['title', 'description', 'category', 'eventDate', 'eventTime', 'venue', 'registrationDeadline', 'registrationFee', 'maxParticipants', 'registeredCount', 'qrCodeToken', 'upcoming', 'published', 'createdByUid', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['title', 'description', 'category', 'eventDate', 'eventTime', 'venue', 'posterUri', 'registrationDeadline', 'registrationFee', 'maxParticipants', 'registeredCount', 'qrCodeToken', 'upcoming', 'published', 'createdByUid', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidSocietyEvent(incoming()) &&
+        isEventManager();
+
+      allow update: if isSignedIn() && isValidId(eventId) && isValidSocietyEvent(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().createdByUid == existing().createdByUid &&
+        (
+          // Action 1: Student increments or decrements registeredCount by 1 on registration / cancellation
+          (!isBlockedUser() && existing().published == true &&
+           ((existing().upcoming == true && incoming().registeredCount == existing().registeredCount + 1) ||
+            (existing().registeredCount > 0 && incoming().registeredCount == existing().registeredCount - 1)) &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['registeredCount', 'updatedAt'])) ||
+          // Action 1B: Student Manager decrements registeredCount when purging a student's registrations
+          ((isStudentOrMembershipManager()) &&
+           existing().registeredCount > 0 && incoming().registeredCount == existing().registeredCount - 1 &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['registeredCount', 'updatedAt'])) ||
+          // Action 2: Event or Finance Manager updates event details
+          isEventOrFinanceAdmin()
+        );
+
+      allow delete: if isSignedIn() && isValidId(eventId) && isEventManager();
+    }
+
+    // 7. Event Registrations
+    match /event_registrations/{registrationId} {
+      allow get: if isSignedIn() && isValidId(registrationId) && ((existing().studentUid == request.auth.uid && !isBlockedUser()) || isEventOrFinanceAdmin() || isStudentOrMembershipManager());
+      allow list: if isSignedIn() && (
+        (existing().studentUid == request.auth.uid && !isBlockedUser()) ||
+        ((isEventOrFinanceAdmin() || isStudentOrMembershipManager()) && existing().societyId == 'YES_UAF')
+      );
+
+      allow create: if isSignedIn() && isValidId(registrationId) &&
+        incoming().keys().hasAll(['eventId', 'eventTitle', 'eventDate', 'studentUid', 'studentName', 'registrationNumber', 'department', 'feeAmount', 'paymentStatus', 'registrationStatus', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['eventId', 'eventTitle', 'eventDate', 'studentUid', 'studentName', 'registrationNumber', 'department', 'feeAmount', 'paymentStatus', 'registrationStatus', 'receiptUri', 'transactionRef', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidEventRegistration(incoming()) &&
+        (
+          (request.auth.uid == incoming().studentUid &&
+           !isBlockedUser() &&
+           incoming().paymentStatus in ['FREE', 'UNPAID', 'RECEIPT_SUBMITTED'] &&
+           incoming().registrationStatus in ['PENDING', 'APPROVED']) ||
+          isEventOrFinanceAdmin()
+        );
+
+      allow update: if isSignedIn() && isValidId(registrationId) && isValidEventRegistration(incoming()) &&
+        incoming().studentUid == existing().studentUid &&
+        incoming().eventId == existing().eventId &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          // Action 1: Student submits payment receipt/transaction reference
+          (request.auth.uid == existing().studentUid &&
+           !isBlockedUser() &&
+           existing().paymentStatus != 'PAID' &&
+           incoming().paymentStatus == 'RECEIPT_SUBMITTED' &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['receiptUri', 'transactionRef', 'paymentStatus', 'updatedAt'])) ||
+          // Action 2: Event or Finance Admin updates registration or payment status
+          isEventOrFinanceAdmin()
+        );
+
+      allow delete: if isSignedIn() && isValidId(registrationId) && (isEventOrFinanceAdmin() || isStudentOrMembershipManager() || (resource != null && existing().studentUid == request.auth.uid && !isBlockedUser()));
+    }
+
+    // 8. Attendance Records
+    match /attendance_records/{attendanceId} {
+      allow get: if isSignedIn() && isValidId(attendanceId) && ((existing().studentUid == request.auth.uid && !isBlockedUser()) || isAttendanceManager() || isStudentOrMembershipManager());
+      allow list: if isSignedIn() && (
+        (existing().studentUid == request.auth.uid && !isBlockedUser()) ||
+        ((isAttendanceManager() || isStudentOrMembershipManager()) && existing().societyId == 'YES_UAF')
+      );
+
+      allow create: if isSignedIn() && isValidId(attendanceId) &&
+        incoming().keys().hasAll(['eventId', 'eventTitle', 'eventDate', 'studentUid', 'studentName', 'registrationNumber', 'status', 'method', 'markedByUid', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['eventId', 'eventTitle', 'eventDate', 'studentUid', 'studentName', 'registrationNumber', 'membershipId', 'status', 'method', 'markedByUid', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidAttendanceRecord(incoming()) &&
+        (
+          (request.auth.uid == incoming().studentUid &&
+           !isBlockedUser() &&
+           incoming().markedByUid == request.auth.uid &&
+           incoming().method == 'EVENT_QR_CHECKIN' &&
+           incoming().status == 'PRESENT') ||
+          isAttendanceManager()
+        );
+
+      allow update: if isSignedIn() && isValidId(attendanceId) && isValidAttendanceRecord(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        isAttendanceManager() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'method', 'markedByUid', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(attendanceId) && (isAttendanceManager() || isStudentOrMembershipManager());
+    }
+
+    // 9. Announcements
+    match /announcements/{announcementId} {
+      allow get: if isSignedIn() && isValidId(announcementId) && (existing().published == true || isAnnouncementManager());
+      allow list: if isSignedIn() && (
+        existing().published == true ||
+        (isAnnouncementManager() && existing().societyId == 'YES_UAF')
+      );
+
+      allow create: if isSignedIn() && isValidId(announcementId) &&
+        incoming().keys().hasAll(['title', 'message', 'category', 'targetGroup', 'priority', 'authorName', 'authorUid', 'published', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['title', 'message', 'category', 'targetGroup', 'priority', 'scheduledDate', 'authorName', 'authorUid', 'published', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidAnnouncement(incoming()) &&
+        isAnnouncementManager();
+
+      allow update: if isSignedIn() && isValidId(announcementId) && isValidAnnouncement(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        isAnnouncementManager() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'message', 'category', 'targetGroup', 'priority', 'scheduledDate', 'published', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(announcementId) && isAnnouncementManager();
+    }
+
+    // 10. Personal Notifications
+    match /notifications/{notificationId} {
+      allow get: if isSignedIn() && isValidId(notificationId) && (existing().recipientUid == request.auth.uid || isActiveAdmin());
+      allow list: if isSignedIn() && (
+        existing().recipientUid == request.auth.uid ||
+        (isActiveAdmin() && existing().societyId == 'YES_UAF')
+      );
+
+      allow create: if isSignedIn() && isValidId(notificationId) &&
+        incoming().keys().hasAll(['recipientUid', 'title', 'body', 'type', 'read', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['recipientUid', 'title', 'body', 'type', 'read', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidUserNotification(incoming()) &&
+        (request.auth.uid == incoming().recipientUid || isActiveAdmin());
+
+      allow update: if isSignedIn() && isValidId(notificationId) && isValidUserNotification(incoming()) &&
+        incoming().recipientUid == existing().recipientUid &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          (request.auth.uid == existing().recipientUid &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt'])) ||
+          isActiveAdmin()
+        );
+
+      allow delete: if isSignedIn() && isValidId(notificationId) && (isActiveAdmin() || (resource != null && existing().recipientUid == request.auth.uid));
+    }
+
+    // 11. Student Payments
+    match /payments/{paymentId} {
+      allow get: if isSignedIn() && isValidId(paymentId) && ((existing().studentUid == request.auth.uid && !isBlockedUser()) || isFinanceAdmin() || isStudentOrMembershipManager());
+      allow list: if isSignedIn() && (
+        (existing().studentUid == request.auth.uid && !isBlockedUser()) ||
+        ((isFinanceAdmin() || isStudentOrMembershipManager()) && existing().societyId == 'YES_UAF')
+      );
+
+      allow create: if isSignedIn() && isValidId(paymentId) &&
+        incoming().keys().hasAll(['studentUid', 'studentName', 'registrationNumber', 'purposeTitle', 'amount', 'status', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['studentUid', 'studentName', 'registrationNumber', 'eventId', 'purposeTitle', 'amount', 'paymentDate', 'transactionRef', 'receiptUri', 'status', 'verifiedByUid', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidStudentPayment(incoming()) &&
+        (
+          (request.auth.uid == incoming().studentUid &&
+           !isBlockedUser() &&
+           incoming().status in ['UNPAID', 'PENDING_VERIFICATION'] &&
+           (!('verifiedByUid' in incoming()) || incoming().verifiedByUid == '')) ||
+          isEventOrFinanceAdmin()
+        );
+
+      allow update: if isSignedIn() && isValidId(paymentId) && isValidStudentPayment(incoming()) &&
+        incoming().studentUid == existing().studentUid &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          (request.auth.uid == existing().studentUid &&
+           !isBlockedUser() &&
+           existing().status != 'VERIFIED' &&
+           incoming().status == 'PENDING_VERIFICATION' &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['paymentDate', 'transactionRef', 'receiptUri', 'status', 'updatedAt'])) ||
+          isFinanceAdmin()
+        );
+
+      allow delete: if isSignedIn() && isValidId(paymentId) && (isFinanceAdmin() || isStudentOrMembershipManager() || (resource != null && existing().studentUid == request.auth.uid && !isBlockedUser() && existing().status != 'VERIFIED'));
+    }
+
+    // 12. Society Finance Ledger (Income & Expenses — Restricted strictly to Finance Admins & Super Admin)
+    match /finance_transactions/{transactionId} {
+      allow get: if isSignedIn() && isValidId(transactionId) && isFinanceAdmin();
+      allow list: if isSignedIn() && isFinanceAdmin() && existing().societyId == 'YES_UAF';
+
+      allow create: if isSignedIn() && isValidId(transactionId) &&
+        incoming().keys().hasAll(['title', 'type', 'category', 'amount', 'transactionDate', 'recordedByUid', 'recordedByName', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['title', 'type', 'category', 'amount', 'transactionDate', 'referenceNumber', 'relatedEventId', 'notes', 'recordedByUid', 'recordedByName', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidFinanceTransaction(incoming()) &&
+        isFinanceAdmin();
+
+      allow update: if isSignedIn() && isValidId(transactionId) && isValidFinanceTransaction(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        isFinanceAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'type', 'category', 'amount', 'transactionDate', 'referenceNumber', 'relatedEventId', 'notes', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(transactionId) && isFinanceAdmin();
+    }
+
+    // 12B. Official Society Payment Accounts (Configured by Finance Admin; active accounts readable by Students)
+    match /payment_accounts/{accountId} {
+      allow get: if isSignedIn() && isValidId(accountId) && (existing().active == true || isFinanceAdmin());
+      allow list: if isSignedIn() && (
+        existing().active == true ||
+        (isFinanceAdmin() && existing().societyId == 'YES_UAF')
+      );
+
+      allow create: if isSignedIn() && isValidId(accountId) &&
+        incoming().keys().hasAll(['accountType', 'bankOrWalletName', 'accountTitle', 'accountNumber', 'active', 'updatedByUid', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['accountType', 'bankOrWalletName', 'accountTitle', 'accountNumber', 'ibanOrBranch', 'instructions', 'active', 'updatedByUid', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidPaymentAccount(incoming()) &&
+        isFinanceAdmin();
+
+      allow update: if isSignedIn() && isValidId(accountId) && isValidPaymentAccount(incoming()) &&
+        incoming().keys().hasOnly(['accountType', 'bankOrWalletName', 'accountTitle', 'accountNumber', 'ibanOrBranch', 'instructions', 'active', 'updatedByUid', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().createdAt == existing().createdAt &&
+        isFinanceAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['accountType', 'bankOrWalletName', 'accountTitle', 'accountNumber', 'ibanOrBranch', 'instructions', 'active', 'updatedByUid', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(accountId) && isFinanceAdmin();
+    }
+
+    // 13. Society Gallery
+    match /gallery_items/{itemId} {
+      allow get: if isSignedIn() && isValidId(itemId) && (existing().approved == true || isGalleryManager());
+      allow list: if isSignedIn() && (
+        existing().approved == true ||
+        (isGalleryManager() && existing().societyId == 'YES_UAF')
+      );
+
+      allow create: if isSignedIn() && isValidId(itemId) &&
+        incoming().keys().hasAll(['title', 'albumCategory', 'eventDate', 'approved', 'uploadedByUid', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['title', 'albumCategory', 'caption', 'eventDate', 'imageUri', 'accentTheme', 'approved', 'uploadedByUid', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidGalleryItem(incoming()) &&
+        isGalleryManager();
+
+      allow update: if isSignedIn() && isValidId(itemId) && isValidGalleryItem(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        isGalleryManager() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['title', 'albumCategory', 'caption', 'eventDate', 'imageUri', 'accentTheme', 'approved', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(itemId) && isGalleryManager();
+    }
+
+    // 14. Certificates (Direct verification by unique document ID / code; list scoped to owner or Certificate/Student Manager)
+    match /certificates/{certificateId} {
+      allow get: if isSignedIn() && isValidId(certificateId);
+      allow list: if isSignedIn() && (
+        (existing().studentUid == request.auth.uid && !isBlockedUser()) ||
+        ((isCertificateManager() || isStudentOrMembershipManager()) && existing().societyId == 'YES_UAF')
+      );
+
+      allow create: if isSignedIn() && isValidId(certificateId) &&
+        incoming().keys().hasAll(['certificateCode', 'studentUid', 'studentName', 'registrationNumber', 'eventTitle', 'eventDate', 'certificateType', 'authorizedSignatory', 'issuedByUid', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['certificateCode', 'studentUid', 'studentName', 'registrationNumber', 'eventId', 'eventTitle', 'eventDate', 'certificateType', 'authorizedSignatory', 'issuedByUid', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidSocietyCertificate(incoming()) &&
+        isCertificateManager();
+
+      allow update: if isSignedIn() && isValidId(certificateId) && isValidSocietyCertificate(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        isCertificateManager() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['eventTitle', 'eventDate', 'certificateType', 'authorizedSignatory', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(certificateId) && (isCertificateManager() || isStudentOrMembershipManager());
+    }
+
+    // 15. Student Feedback & Suggestions
+    match /feedback/{feedbackId} {
+      allow get: if isSignedIn() && isValidId(feedbackId) && ((existing().studentUid == request.auth.uid && !isBlockedUser()) || isActiveAdmin());
+      allow list: if isSignedIn() && (
+        (existing().studentUid == request.auth.uid && !isBlockedUser()) ||
+        (isActiveAdmin() && existing().societyId == 'YES_UAF')
+      );
+
+      allow create: if isSignedIn() && isValidId(feedbackId) &&
+        incoming().keys().hasAll(['studentUid', 'studentName', 'category', 'subject', 'message', 'status', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['studentUid', 'studentName', 'category', 'subject', 'message', 'relatedEventTitle', 'status', 'adminResponse', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidStudentFeedback(incoming()) &&
+        request.auth.uid == incoming().studentUid &&
+        !isBlockedUser() &&
+        incoming().status == 'SUBMITTED' &&
+        (!('adminResponse' in incoming()) || incoming().adminResponse == '');
+
+      allow update: if isSignedIn() && isValidId(feedbackId) && isValidStudentFeedback(incoming()) &&
+        incoming().studentUid == existing().studentUid &&
+        incoming().createdAt == existing().createdAt &&
+        isActiveAdmin() &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminResponse', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(feedbackId) && (isActiveAdmin() || (resource != null && existing().studentUid == request.auth.uid && !isBlockedUser()));
+    }
+
+    // 16. Administrative Audit Logs (Update forbidden; Delete restricted strictly to Super Admin)
+    match /audit_logs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && isActiveAdmin();
+      allow list: if isSignedIn() && isActiveAdmin() && existing().societyId == 'YES_UAF';
+
+      allow create: if isSignedIn() && isValidId(logId) &&
+        incoming().keys().hasAll(['actorUid', 'actorName', 'actorRole', 'action', 'targetSummary', 'societyId', 'createdAt']) &&
+        incoming().keys().hasOnly(['actorUid', 'actorName', 'actorRole', 'action', 'targetSummary', 'societyId', 'createdAt']) &&
+        isValidAdminAuditLog(incoming()) &&
+        incoming().actorUid == request.auth.uid &&
+        isActiveAdmin();
+
+      allow update: if false;
+      allow delete: if isSignedIn() && isValidId(logId) && isSuperAdmin();
+    }
+
+    // 17. Blocked Accounts (Admin purges whole student data and blocks login access; blocked user may only read own block notice)
+    match /blocked_accounts/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isStudentOrMembershipManager());
+      allow list: if isSignedIn() && (
+        existing().userId == request.auth.uid ||
+        ((isStudentOrMembershipManager()) && existing().societyId == 'YES_UAF')
+      );
+
+      allow create: if isSignedIn() && isValidId(userId) &&
+        incoming().keys().hasAll(['userId', 'email', 'fullName', 'reason', 'blockedByUid', 'blockedByName', 'societyId', 'createdAt', 'updatedAt']) &&
+        incoming().keys().hasOnly(['userId', 'email', 'fullName', 'registrationNumber', 'reason', 'blockedByUid', 'blockedByName', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidBlockedAccount(incoming()) &&
+        incoming().userId == userId &&
+        (isStudentOrMembershipManager());
+
+      allow update: if isSignedIn() && isValidId(userId) &&
+        incoming().keys().hasOnly(['userId', 'email', 'fullName', 'registrationNumber', 'reason', 'blockedByUid', 'blockedByName', 'societyId', 'createdAt', 'updatedAt']) &&
+        isValidBlockedAccount(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        (isStudentOrMembershipManager());
+
+      allow delete: if isSignedIn() && isValidId(userId) && (isStudentOrMembershipManager());
+    }
+  }
+}

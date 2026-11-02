@@ -1,0 +1,6 @@
+{
+  "name": "Young Entomologist Society",
+  "description": "University society management platform for the Young Entomologist Society (YES) with dedicated Administrator and Student dashboards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
